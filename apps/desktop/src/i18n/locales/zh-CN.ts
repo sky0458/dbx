@@ -73,6 +73,7 @@ export default withEnglishFallback({
     downloadAndInstall: "下载并安装",
     activeTasksBlockUpdate: "有 {count} 个任务正在执行，请等待任务完成后再更新 DBX。",
     portableAutomaticUpdate: "DBX 将下载已签名的便携版 ZIP，退出后仅替换 DBX.exe 并自动重启。portable.dbx 和 data 会保留。",
+    fixedRuntimeManualUpdate: "此版本内置固定版 WebView2 Runtime。更新时请下载并整体替换便携包；应用内仅替换 DBX.exe 的更新已禁用。",
     downloading: "下载中 {progress}%",
     downloadFailed: "更新下载失败：{error}",
     installing: "正在安装更新...",

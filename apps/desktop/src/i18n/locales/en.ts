@@ -71,6 +71,7 @@ export default {
     downloadAndInstall: "Download & Install",
     activeTasksBlockUpdate: "{count} task(s) are still running. Wait for them to finish before updating DBX.",
     portableAutomaticUpdate: "DBX will download the signed portable ZIP, replace only DBX.exe after exit, and restart automatically. portable.dbx and data will be kept.",
+    fixedRuntimeManualUpdate: "This package includes a fixed WebView2 Runtime. Download and replace the complete portable package to update it; in-app executable-only updates are disabled.",
     downloading: "Downloading {progress}%",
     downloadFailed: "Update download failed: {error}",
     installing: "Installing update...",

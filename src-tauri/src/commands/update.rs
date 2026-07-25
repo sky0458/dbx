@@ -21,6 +21,8 @@ const GITHUB_RELEASE_DOWNLOAD_PREFIX: &str = "https://github.com/t8y2/dbx/releas
 const UPDATE_DOWNLOAD_PROGRESS_EVENT: &str = "update-download-progress";
 const MAX_PORTABLE_ARCHIVE_BYTES: usize = 512 * 1024 * 1024;
 const MAX_PORTABLE_SIGNATURE_BYTES: usize = 64 * 1024;
+const FIXED_WEBVIEW2_MANUAL_UPDATE_ERROR: &str =
+    "This Fixed WebView2 portable build must be updated by replacing the complete ZIP package.";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -208,6 +210,7 @@ pub async fn check_for_updates(
     let current_version = env!("CARGO_PKG_VERSION");
     let mut info = dbx_core::update::build_update_info(release, current_version);
     info.portable_mode = crate::data_dir::is_portable_mode();
+    info.manual_update_only = crate::data_dir::is_fixed_webview2_portable_mode();
     Ok(info)
 }
 
@@ -229,6 +232,7 @@ pub async fn download_update(
     source: UpdateDownloadSource,
     latest_version: Option<String>,
 ) -> Result<(), String> {
+    ensure_automatic_update_supported(crate::data_dir::is_fixed_webview2_portable_mode())?;
     let portable_version = if crate::data_dir::is_portable_mode() {
         let requested_version =
             latest_version.as_deref().ok_or_else(|| "Latest version is required for portable updates.".to_string())?;
@@ -397,6 +401,7 @@ async fn download_bounded_bytes(
 
 #[tauri::command]
 pub fn install_downloaded_update(app: AppHandle, state: tauri::State<'_, PendingUpdateState>) -> Result<(), String> {
+    ensure_automatic_update_supported(crate::data_dir::is_fixed_webview2_portable_mode())?;
     let ready = state.take_ready()?;
     let portable = matches!(&ready, ReadyUpdate::Portable { .. });
     let install_result = match &ready {
@@ -417,6 +422,14 @@ pub fn install_downloaded_update(app: AppHandle, state: tauri::State<'_, Pending
         schedule_portable_update_exit(app);
     }
     Ok(())
+}
+
+fn ensure_automatic_update_supported(manual_update_only: bool) -> Result<(), String> {
+    if manual_update_only {
+        Err(FIXED_WEBVIEW2_MANUAL_UPDATE_ERROR.to_string())
+    } else {
+        Ok(())
+    }
 }
 
 fn schedule_portable_update_exit(app: AppHandle) {
@@ -446,14 +459,21 @@ async fn update_url_is_available(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        tag_version, UpdateDownloadSource, CNB_RELEASE_DOWNLOAD_PREFIX, GITHUB_RELEASE_DOWNLOAD_PREFIX,
-        OFFICIAL_UPDATE_ENDPOINTS, R2_LATEST_RELEASE_DOWNLOAD_PREFIX,
+        ensure_automatic_update_supported, tag_version, UpdateDownloadSource, CNB_RELEASE_DOWNLOAD_PREFIX,
+        FIXED_WEBVIEW2_MANUAL_UPDATE_ERROR, GITHUB_RELEASE_DOWNLOAD_PREFIX, OFFICIAL_UPDATE_ENDPOINTS,
+        R2_LATEST_RELEASE_DOWNLOAD_PREFIX,
     };
 
     #[test]
     fn normalizes_update_tag_versions() {
         assert_eq!(tag_version("0.5.39"), "v0.5.39");
         assert_eq!(tag_version("v0.5.39"), "v0.5.39");
+    }
+
+    #[test]
+    fn blocks_executable_only_updates_for_fixed_webview2_packages() {
+        assert_eq!(ensure_automatic_update_supported(true), Err(FIXED_WEBVIEW2_MANUAL_UPDATE_ERROR.to_string()));
+        assert!(ensure_automatic_update_supported(false).is_ok());
     }
 
     #[test]

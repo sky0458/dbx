@@ -1,0 +1,97 @@
+name: Windows Server 2016 Fixed WebView2 Portable
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/windows-server-2016-fixed-webview2-portable
+    paths:
+      - ".github/scripts/package-fixed-webview2-portable.ps1"
+      - ".github/workflows/windows-server-2016-fixed-webview2-portable.yml"
+      - "apps/**"
+      - "crates/**"
+      - "docs/README-Server2016.txt"
+      - "src-tauri/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-server-2016-fixed-webview2-portable-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WEBVIEW2_VERSION: "150.0.4078.99"
+  WEBVIEW2_X64_URL: "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/1c394b0d-2689-4d8b-af57-2f2018abccf6/Microsoft.WebView2.FixedVersionRuntime.150.0.4078.99.x64.cab"
+  WEBVIEW2_X64_SHA256: "2e69cdc3d304441562c7c2a8c21948c3b8e69dc7629d912ef853e41147220bda"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build unsigned x64 portable package
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.27.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./ -> target"
+          shared-key: ws2016-fixed-webview2-x64
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run fixed-runtime tests
+        shell: pwsh
+        run: |
+          cargo test -p dbx --no-default-features windows_webview2 --lib
+          cargo test -p dbx --no-default-features fixed_webview2 --lib
+          pnpm vitest run apps/desktop/src/components/layout/UpdateDialog.spec.ts
+          pnpm typecheck
+
+      - name: Build DBX.exe without an installer
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --no-bundle
+
+      - name: Assemble and verify portable ZIP
+        id: package
+        shell: pwsh
+        run: |
+          ./.github/scripts/package-fixed-webview2-portable.ps1 `
+            -ExecutablePath "target/x86_64-pc-windows-msvc/release/dbx.exe" `
+            -OutputDirectory "${env:RUNNER_TEMP}/artifacts" `
+            -WebView2Version "${env:WEBVIEW2_VERSION}" `
+            -WebView2Url "${env:WEBVIEW2_X64_URL}" `
+            -WebView2Sha256 "${env:WEBVIEW2_X64_SHA256}" `
+            -CommitSha "${env:GITHUB_SHA}"
+
+      - name: Upload unsigned test package
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ steps.package.outputs.archive_name }}
+          path: |
+            ${{ steps.package.outputs.zip_path }}
+            ${{ steps.package.outputs.zip_hash_path }}
+          if-no-files-found: error
+          retention-days: 14

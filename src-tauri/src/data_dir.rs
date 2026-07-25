@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "windows")]
-const PORTABLE_MARKER: &str = "portable.dbx";
+pub(crate) const PORTABLE_MARKER: &str = "portable.dbx";
+#[cfg(target_os = "windows")]
+pub(crate) const FIXED_WEBVIEW2_MARKER: &str = "fixed-webview2.dbx";
 #[cfg(target_os = "windows")]
 const INSTALLER_MARKER: &str = "uninstall.exe";
 
@@ -60,6 +62,30 @@ pub fn alternative_data_dir(resolution: &DataDirResolution) -> Option<PathBuf> {
 
 pub fn is_portable_mode() -> bool {
     resolve_data_dir_with_mode(PathBuf::new()).is_portable_mode()
+}
+
+pub fn is_fixed_webview2_portable_mode() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        return current_exe_dir().is_some_and(|exe_dir| {
+            fixed_webview2_portable_from_inputs(
+                exe_dir.join(PORTABLE_MARKER).is_file(),
+                exe_dir.join(FIXED_WEBVIEW2_MARKER).is_file(),
+                exe_dir.join(INSTALLER_MARKER).is_file(),
+            )
+        });
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    false
+}
+
+fn fixed_webview2_portable_from_inputs(
+    portable_marker_exists: bool,
+    fixed_marker_exists: bool,
+    installer_marker_exists: bool,
+) -> bool {
+    portable_marker_exists && fixed_marker_exists && !installer_marker_exists
 }
 
 #[cfg(target_os = "windows")]
@@ -128,7 +154,7 @@ fn resolve_data_dir_from_inputs(
 mod tests {
     use std::path::PathBuf;
 
-    use super::{alternative_data_dir, resolve_data_dir_from_inputs, DataDirMode};
+    use super::{alternative_data_dir, fixed_webview2_portable_from_inputs, resolve_data_dir_from_inputs, DataDirMode};
 
     #[test]
     fn uses_portable_data_dir_when_marker_exists_without_installer_marker() {
@@ -199,5 +225,13 @@ mod tests {
             resolve_data_dir_from_inputs(default_dir, Some(exe_dir), true, false, Some(PathBuf::from(r"E:\DBXData")));
 
         assert_eq!(alternative_data_dir(&resolution), None);
+    }
+
+    #[test]
+    fn fixed_webview2_mode_requires_both_portable_markers_and_no_installer() {
+        assert!(fixed_webview2_portable_from_inputs(true, true, false));
+        assert!(!fixed_webview2_portable_from_inputs(false, true, false));
+        assert!(!fixed_webview2_portable_from_inputs(true, false, false));
+        assert!(!fixed_webview2_portable_from_inputs(true, true, true));
     }
 }
