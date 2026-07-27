@@ -5,6 +5,8 @@ pub(crate) const PORTABLE_MARKER: &str = "portable.dbx";
 #[cfg(target_os = "windows")]
 pub(crate) const FIXED_WEBVIEW2_MARKER: &str = "fixed-webview2.dbx";
 #[cfg(target_os = "windows")]
+pub(crate) const MULTI_USER_MARKER: &str = "multi-user.dbx";
+#[cfg(target_os = "windows")]
 const INSTALLER_MARKER: &str = "uninstall.exe";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,6 +14,7 @@ pub enum DataDirMode {
     Default,
     EnvOverride,
     Portable { exe_dir: PathBuf },
+    SharedPortable { exe_dir: PathBuf },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,7 +31,7 @@ impl DataDirResolution {
     }
 
     pub fn is_portable_mode(&self) -> bool {
-        matches!(self.mode, DataDirMode::Portable { .. })
+        matches!(self.mode, DataDirMode::Portable { .. } | DataDirMode::SharedPortable { .. })
     }
 }
 
@@ -41,12 +44,14 @@ pub fn resolve_data_dir_with_mode(default_app_data_dir: PathBuf) -> DataDirResol
     let exe_dir = None;
 
     let portable_marker_exists = exe_dir.as_deref().is_some_and(portable_marker_exists);
+    let multi_user_marker_exists = exe_dir.as_deref().is_some_and(multi_user_marker_exists);
     let installer_marker_exists = exe_dir.as_deref().is_some_and(installer_marker_exists);
 
     resolve_data_dir_from_inputs(
         default_app_data_dir,
         exe_dir,
         portable_marker_exists,
+        multi_user_marker_exists,
         installer_marker_exists,
         env_data_dir,
     )
@@ -55,6 +60,7 @@ pub fn resolve_data_dir_with_mode(default_app_data_dir: PathBuf) -> DataDirResol
 pub fn alternative_data_dir(resolution: &DataDirResolution) -> Option<PathBuf> {
     match &resolution.mode {
         DataDirMode::Portable { .. } => Some(resolution.default_data_dir.clone()),
+        DataDirMode::SharedPortable { .. } => None,
         DataDirMode::Default => resolution.portable_data_dir.clone(),
         DataDirMode::EnvOverride => None,
     }
@@ -104,6 +110,16 @@ fn portable_marker_exists(_exe_dir: &Path) -> bool {
 }
 
 #[cfg(target_os = "windows")]
+fn multi_user_marker_exists(exe_dir: &Path) -> bool {
+    exe_dir.join(MULTI_USER_MARKER).is_file()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn multi_user_marker_exists(_exe_dir: &Path) -> bool {
+    false
+}
+
+#[cfg(target_os = "windows")]
 fn installer_marker_exists(exe_dir: &Path) -> bool {
     exe_dir.join(INSTALLER_MARKER).is_file()
 }
@@ -117,6 +133,7 @@ fn resolve_data_dir_from_inputs(
     default_app_data_dir: PathBuf,
     exe_dir: Option<PathBuf>,
     portable_marker_exists: bool,
+    multi_user_marker_exists: bool,
     installer_marker_exists: bool,
     env_data_dir: Option<PathBuf>,
 ) -> DataDirResolution {
@@ -133,6 +150,15 @@ fn resolve_data_dir_from_inputs(
 
     if portable_marker_exists && !installer_marker_exists {
         if let Some(exe_dir) = exe_dir {
+            if multi_user_marker_exists {
+                return DataDirResolution {
+                    data_dir: default_app_data_dir.clone(),
+                    default_data_dir: default_app_data_dir,
+                    mode: DataDirMode::SharedPortable { exe_dir },
+                    portable_data_dir,
+                };
+            }
+
             return DataDirResolution {
                 data_dir: exe_dir.join("data"),
                 default_data_dir: default_app_data_dir,
@@ -161,7 +187,7 @@ mod tests {
         let default_dir = PathBuf::from(r"C:\Users\Administrator\AppData\Roaming\com.dbx.app");
         let exe_dir = PathBuf::from(r"D:\Apps\DBX");
 
-        let resolution = resolve_data_dir_from_inputs(default_dir, Some(exe_dir.clone()), true, false, None);
+        let resolution = resolve_data_dir_from_inputs(default_dir, Some(exe_dir.clone()), true, false, false, None);
 
         assert_eq!(resolution.data_dir, exe_dir.join("data"));
         assert_eq!(resolution.mode, DataDirMode::Portable { exe_dir });
@@ -174,7 +200,7 @@ mod tests {
         let default_dir = PathBuf::from(r"C:\Users\Administrator\AppData\Roaming\com.dbx.app");
         let exe_dir = PathBuf::from(r"C:\Program Files\DBX");
 
-        let resolution = resolve_data_dir_from_inputs(default_dir.clone(), Some(exe_dir), true, true, None);
+        let resolution = resolve_data_dir_from_inputs(default_dir.clone(), Some(exe_dir), true, false, true, None);
 
         assert_eq!(resolution.data_dir, default_dir);
         assert_eq!(resolution.mode, DataDirMode::Default);
@@ -188,7 +214,8 @@ mod tests {
         let exe_dir = PathBuf::from(r"C:\Program Files\DBX");
         let env_dir = PathBuf::from(r"E:\DBXData");
 
-        let resolution = resolve_data_dir_from_inputs(default_dir, Some(exe_dir), true, true, Some(env_dir.clone()));
+        let resolution =
+            resolve_data_dir_from_inputs(default_dir, Some(exe_dir), true, true, true, Some(env_dir.clone()));
 
         assert_eq!(resolution.data_dir, env_dir);
         assert_eq!(resolution.mode, DataDirMode::EnvOverride);
@@ -201,9 +228,24 @@ mod tests {
         let default_dir = PathBuf::from(r"C:\Users\Administrator\AppData\Roaming\com.dbx.app");
         let exe_dir = PathBuf::from(r"D:\Apps\DBX");
 
-        let resolution = resolve_data_dir_from_inputs(default_dir.clone(), Some(exe_dir), true, false, None);
+        let resolution = resolve_data_dir_from_inputs(default_dir.clone(), Some(exe_dir), true, false, false, None);
 
         assert_eq!(alternative_data_dir(&resolution), Some(default_dir));
+    }
+
+    #[test]
+    fn shared_portable_mode_keeps_application_data_per_windows_user() {
+        let default_dir = PathBuf::from(r"C:\Users\alice\AppData\Roaming\com.dbx.app");
+        let exe_dir = PathBuf::from(r"D:\SharedApps\DBX");
+
+        let resolution =
+            resolve_data_dir_from_inputs(default_dir.clone(), Some(exe_dir.clone()), true, true, false, None);
+
+        assert_eq!(resolution.data_dir, default_dir);
+        assert_eq!(resolution.mode, DataDirMode::SharedPortable { exe_dir });
+        assert!(!resolution.uses_custom_data_dir());
+        assert!(resolution.is_portable_mode());
+        assert_eq!(alternative_data_dir(&resolution), None);
     }
 
     #[test]
@@ -211,7 +253,7 @@ mod tests {
         let default_dir = PathBuf::from(r"C:\Users\Administrator\AppData\Roaming\com.dbx.app");
         let exe_dir = PathBuf::from(r"C:\Program Files\DBX");
 
-        let resolution = resolve_data_dir_from_inputs(default_dir, Some(exe_dir.clone()), true, true, None);
+        let resolution = resolve_data_dir_from_inputs(default_dir, Some(exe_dir.clone()), true, false, true, None);
 
         assert_eq!(alternative_data_dir(&resolution), Some(exe_dir.join("data")));
     }
@@ -221,8 +263,14 @@ mod tests {
         let default_dir = PathBuf::from(r"C:\Users\Administrator\AppData\Roaming\com.dbx.app");
         let exe_dir = PathBuf::from(r"D:\Apps\DBX");
 
-        let resolution =
-            resolve_data_dir_from_inputs(default_dir, Some(exe_dir), true, false, Some(PathBuf::from(r"E:\DBXData")));
+        let resolution = resolve_data_dir_from_inputs(
+            default_dir,
+            Some(exe_dir),
+            true,
+            true,
+            false,
+            Some(PathBuf::from(r"E:\DBXData")),
+        );
 
         assert_eq!(alternative_data_dir(&resolution), None);
     }

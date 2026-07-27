@@ -93,18 +93,20 @@ Copy-Item -LiteralPath "LICENSE" -Destination (Join-Path $packageDir "LICENSE")
 Copy-Item -LiteralPath "docs/README-Server2016.txt" -Destination (Join-Path $packageDir "README-Server2016.txt")
 New-Item -ItemType File -Force -Path (Join-Path $packageDir "portable.dbx") | Out-Null
 New-Item -ItemType File -Force -Path (Join-Path $packageDir "fixed-webview2.dbx") | Out-Null
+New-Item -ItemType File -Force -Path (Join-Path $packageDir "multi-user.dbx") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $packageDir "data") | Out-Null
 Set-Content -LiteralPath (Join-Path $packageDir "data/README.txt") -Encoding utf8NoBOM -Value @"
-DBX stores portable application data in this directory.
-Keep this directory when replacing the complete package during an upgrade.
+This multi-user package stores DBX application data separately for every Windows user.
+The shared data directory is intentionally unused while multi-user.dbx exists.
 "@
 
 $versions = [ordered]@{
-    package_format = 1
+    package_format = 2
     dbx = $appVersion
     commit = $CommitSha
     architecture = "x64"
     target_os = "Windows Server 2016 Desktop Experience"
+    user_data_scope = "per-windows-user"
     webview2 = $WebView2Version
     webview2_download = $WebView2Url
     webview2_cab_sha256 = $actualCabSha256
@@ -140,6 +142,7 @@ try {
         "DBX-portable/DBX.exe",
         "DBX-portable/portable.dbx",
         "DBX-portable/fixed-webview2.dbx",
+        "DBX-portable/multi-user.dbx",
         "DBX-portable/WebView2Runtime/msedgewebview2.exe",
         "DBX-portable/data/README.txt",
         "DBX-portable/README-Server2016.txt",

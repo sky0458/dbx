@@ -2,9 +2,10 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "windows")]
-use crate::data_dir::{FIXED_WEBVIEW2_MARKER, PORTABLE_MARKER};
+use crate::data_dir::{FIXED_WEBVIEW2_MARKER, MULTI_USER_MARKER, PORTABLE_MARKER};
 
 const FIXED_WEBVIEW2_RUNTIME_DIR: &str = "WebView2Runtime";
+const FIXED_WEBVIEW2_USER_DATA_SUBDIR: &str = "FixedRuntime";
 #[cfg(target_os = "windows")]
 const FIXED_WEBVIEW2_EXECUTABLE: &str = "msedgewebview2.exe";
 #[cfg(target_os = "windows")]
@@ -36,12 +37,26 @@ fn fixed_runtime_paths_from_inputs(
     portable_marker_exists: bool,
     fixed_marker_exists: bool,
     runtime_executable_exists: bool,
+    multi_user_marker_exists: bool,
+    per_user_data_root: Option<&Path>,
 ) -> Option<FixedRuntimePaths> {
     let exe_dir = exe_dir?;
     (portable_marker_exists && fixed_marker_exists && runtime_executable_exists).then(|| FixedRuntimePaths {
         browser_executable_folder: exe_dir.join(FIXED_WEBVIEW2_RUNTIME_DIR),
-        user_data_folder: exe_dir.join("data").join("webview2"),
+        user_data_folder: if multi_user_marker_exists {
+            per_user_data_root
+                .map(|root| root.join("com.dbx.app").join("WebView2").join(FIXED_WEBVIEW2_USER_DATA_SUBDIR))
+                .unwrap_or_else(|| exe_dir.join("data").join("webview2"))
+        } else {
+            exe_dir.join("data").join("webview2")
+        },
     })
+}
+
+fn per_user_local_data_root(local_app_data: Option<OsString>, user_profile: Option<OsString>) -> Option<PathBuf> {
+    non_empty(local_app_data)
+        .map(PathBuf::from)
+        .or_else(|| non_empty(user_profile).map(PathBuf::from).map(|path| path.join("AppData").join("Local")))
 }
 
 fn non_empty(value: Option<OsString>) -> Option<OsString> {
@@ -90,12 +105,17 @@ fn resolve_environment(
 #[cfg(target_os = "windows")]
 pub(crate) fn configure() {
     let exe_dir = std::env::current_exe().ok().and_then(|path| path.parent().map(Path::to_path_buf));
+    let per_user_data_root =
+        per_user_local_data_root(std::env::var_os("LOCALAPPDATA"), std::env::var_os("USERPROFILE"))
+            .unwrap_or_else(std::env::temp_dir);
     let fixed_runtime = exe_dir.as_deref().and_then(|exe_dir| {
         fixed_runtime_paths_from_inputs(
             Some(exe_dir),
             exe_dir.join(PORTABLE_MARKER).is_file(),
             exe_dir.join(FIXED_WEBVIEW2_MARKER).is_file(),
             exe_dir.join(FIXED_WEBVIEW2_RUNTIME_DIR).join(FIXED_WEBVIEW2_EXECUTABLE).is_file(),
+            exe_dir.join(MULTI_USER_MARKER).is_file(),
+            Some(&per_user_data_root),
         )
     });
     let force_sandbox = matches!(std::env::var(FIXED_WEBVIEW2_FORCE_SANDBOX_ENV).as_deref(), Ok("1"));
@@ -126,7 +146,10 @@ pub(crate) fn configure() {}
 
 #[cfg(test)]
 mod tests {
-    use super::{fixed_runtime_paths_from_inputs, resolve_environment, FixedRuntimePaths, FIXED_WEBVIEW2_RUNTIME_DIR};
+    use super::{
+        fixed_runtime_paths_from_inputs, per_user_local_data_root, resolve_environment, FixedRuntimePaths,
+        FIXED_WEBVIEW2_RUNTIME_DIR,
+    };
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -141,11 +164,45 @@ mod tests {
     #[test]
     fn detects_only_complete_fixed_runtime_packages() {
         let exe_dir = PathBuf::from(r"D:\DBX");
-        assert_eq!(fixed_runtime_paths_from_inputs(Some(&exe_dir), true, true, true), Some(fixed_runtime()));
-        assert!(fixed_runtime_paths_from_inputs(Some(&exe_dir), false, true, true).is_none());
-        assert!(fixed_runtime_paths_from_inputs(Some(&exe_dir), true, false, true).is_none());
-        assert!(fixed_runtime_paths_from_inputs(Some(&exe_dir), true, true, false).is_none());
-        assert!(fixed_runtime_paths_from_inputs(None, true, true, true).is_none());
+        assert_eq!(
+            fixed_runtime_paths_from_inputs(Some(&exe_dir), true, true, true, false, None),
+            Some(fixed_runtime())
+        );
+        assert!(fixed_runtime_paths_from_inputs(Some(&exe_dir), false, true, true, false, None).is_none());
+        assert!(fixed_runtime_paths_from_inputs(Some(&exe_dir), true, false, true, false, None).is_none());
+        assert!(fixed_runtime_paths_from_inputs(Some(&exe_dir), true, true, false, false, None).is_none());
+        assert!(fixed_runtime_paths_from_inputs(None, true, true, true, false, None).is_none());
+    }
+
+    #[test]
+    fn keeps_webview2_user_data_separate_for_each_windows_user() {
+        let exe_dir = PathBuf::from(r"D:\SharedApps\DBX");
+        let alice_local_data = PathBuf::from(r"C:\Users\alice\AppData\Local");
+        let bob_local_data = PathBuf::from(r"C:\Users\bob\AppData\Local");
+
+        let alice =
+            fixed_runtime_paths_from_inputs(Some(&exe_dir), true, true, true, true, Some(&alice_local_data)).unwrap();
+        let bob =
+            fixed_runtime_paths_from_inputs(Some(&exe_dir), true, true, true, true, Some(&bob_local_data)).unwrap();
+
+        assert_eq!(alice.user_data_folder, alice_local_data.join("com.dbx.app").join("WebView2").join("FixedRuntime"));
+        assert_eq!(bob.user_data_folder, bob_local_data.join("com.dbx.app").join("WebView2").join("FixedRuntime"));
+        assert_ne!(alice.user_data_folder, bob.user_data_folder);
+    }
+
+    #[test]
+    fn resolves_windows_local_data_root_with_user_profile_fallback() {
+        assert_eq!(
+            per_user_local_data_root(
+                Some(OsString::from(r"C:\Users\alice\AppData\Local")),
+                Some(OsString::from(r"C:\Users\ignored")),
+            ),
+            Some(PathBuf::from(r"C:\Users\alice\AppData\Local"))
+        );
+        assert_eq!(
+            per_user_local_data_root(None, Some(OsString::from(r"C:\Users\bob"))),
+            Some(PathBuf::from(r"C:\Users\bob").join("AppData").join("Local"))
+        );
     }
 
     #[test]

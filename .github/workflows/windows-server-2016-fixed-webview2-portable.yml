@@ -68,6 +68,7 @@ jobs:
         run: |
           cargo test -p dbx --no-default-features windows_webview2 --lib
           cargo test -p dbx --no-default-features fixed_webview2 --lib
+          cargo test -p dbx --no-default-features data_dir --lib
           pnpm vitest run apps/desktop/src/components/layout/UpdateDialog.spec.ts
           pnpm typecheck
 
